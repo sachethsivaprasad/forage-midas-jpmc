@@ -11,16 +11,22 @@ public class TransactionListener {
 
     private static final Logger logger = LoggerFactory.getLogger(TransactionListener.class);
 
+    private final TransactionProcessor transactionProcessor;
+
+    public TransactionListener(TransactionProcessor transactionProcessor) {
+        this.transactionProcessor = transactionProcessor;
+    }
+
     /**
      * Kafka listener that consumes Transaction messages from the configured topic.
      * <p>
      * The topic name is provided via the {@code general.kafka-topic} property in {@code application.yml}.
-     * For now, we simply deserialize and log the incoming transactions to verify integration.
+     * For now, we validate, persist, and apply each incoming transaction.
      */
     @KafkaListener(topics = "${general.kafka-topic}", groupId = "midas-core-consumer-group")
     public void onTransaction(Transaction transaction) {
-        // Integration point: for now, just log the incoming transaction.
         logger.info("Received transaction from Kafka: {}", transaction);
+        transactionProcessor.process(transaction);
     }
 }
 
