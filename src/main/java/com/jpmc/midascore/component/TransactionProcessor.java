@@ -2,6 +2,7 @@ package com.jpmc.midascore.component;
 
 import com.jpmc.midascore.entity.TransactionRecord;
 import com.jpmc.midascore.entity.UserRecord;
+import com.jpmc.midascore.foundation.Incentive;
 import com.jpmc.midascore.foundation.Transaction;
 import com.jpmc.midascore.repository.TransactionRecordRepository;
 import com.jpmc.midascore.repository.UserRepository;
@@ -17,24 +18,21 @@ public class TransactionProcessor {
 
     private final UserRepository userRepository;
     private final TransactionRecordRepository transactionRecordRepository;
+    private final IncentiveApiClient incentiveApiClient;
 
     public TransactionProcessor(UserRepository userRepository,
-                                TransactionRecordRepository transactionRecordRepository) {
+                                TransactionRecordRepository transactionRecordRepository,
+                                IncentiveApiClient incentiveApiClient) {
         this.userRepository = userRepository;
         this.transactionRecordRepository = transactionRecordRepository;
+        this.incentiveApiClient = incentiveApiClient;
     }
 
     /**
      * Validate and apply a transaction.
-     * A transaction is valid if:
-     * - sender exists
-     * - recipient exists
-     * - sender has balance >= amount
-     *
-     * For valid transactions, we:
-     * - persist a TransactionRecord
-     * - debit the sender
-     * - credit the recipient
+     * Valid if: sender exists, recipient exists, sender balance >= amount.
+     * For valid transactions: post to Incentive API, store incentive, persist TransactionRecord,
+     * debit sender by amount only, credit recipient by amount + incentive.
      */
     @Transactional
     public void process(Transaction transaction) {
@@ -48,7 +46,7 @@ public class TransactionProcessor {
         if (sender == null || recipient == null) {
             logger.info("Discarding transaction {} -> {} for {}: invalid user(s)", senderId, recipientId, amount);
             return;
-    }
+        }
 
         if (sender.getBalance() < amount) {
             logger.info("Discarding transaction {} -> {} for {}: insufficient funds (balance={})",
@@ -56,19 +54,20 @@ public class TransactionProcessor {
             return;
         }
 
-        // Record the transaction
-        TransactionRecord record = new TransactionRecord(sender, recipient, amount);
+        Incentive incentiveResponse = incentiveApiClient.fetchIncentive(transaction);
+        float incentive = incentiveResponse != null ? Math.max(0f, incentiveResponse.getAmount()) : 0f;
+
+        TransactionRecord record = new TransactionRecord(sender, recipient, amount, incentive);
         transactionRecordRepository.save(record);
 
-        // Apply balance changes
         sender.setBalance(sender.getBalance() - amount);
-        recipient.setBalance(recipient.getBalance() + amount);
+        recipient.setBalance(recipient.getBalance() + amount + incentive);
 
         userRepository.save(sender);
         userRepository.save(recipient);
 
-        logger.info("Processed transaction {} -> {} for {}. New balances: sender={}, recipient={}",
-                senderId, recipientId, amount, sender.getBalance(), recipient.getBalance());
+        logger.info("Processed transaction {} -> {} for {}, incentive {}. Balances: sender={}, recipient={}",
+                senderId, recipientId, amount, incentive, sender.getBalance(), recipient.getBalance());
     }
 }
 
